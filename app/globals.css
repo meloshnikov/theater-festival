@@ -952,6 +952,12 @@ footer a {
     --mobile-gutter: 14px;
   }
 
+  main {
+    min-height: 100svh;
+    display: flex;
+    flex-direction: column;
+  }
+
   html {
     scroll-padding-bottom: 78px;
   }
@@ -1236,10 +1242,12 @@ footer a {
   }
 
   .workspace {
+    width: 100%;
+    flex: 1 0 auto;
     display: flex;
     flex-direction: column;
     gap: 36px;
-    padding: 0 var(--mobile-gutter) 48px;
+    padding: 0 var(--mobile-gutter) 24px;
   }
 
   .program-panel {
@@ -1580,8 +1588,13 @@ footer a {
   footer {
     align-items: center;
     gap: 12px;
-    padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
-    font-size: 10.5px;
+    margin: 0 var(--mobile-gutter)
+      calc(76px + env(safe-area-inset-bottom));
+    padding: 12px 2px 0;
+    border-top: 1px solid rgba(23, 60, 50, 0.14);
+    background: transparent;
+    color: var(--ink-soft);
+    font-size: 9.5px;
     line-height: 1.25;
   }
 
@@ -1590,7 +1603,12 @@ footer a {
   }
 
   footer a {
-    font-size: 10.5px;
+    padding: 7px 9px;
+    border-radius: 999px;
+    background: var(--sage);
+    color: var(--ink);
+    font-size: 9.5px;
+    text-decoration: none;
     white-space: nowrap;
   }
 
