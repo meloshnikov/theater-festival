@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CalendarDays, Check } from "lucide-react";
 import {
   durationLabel,
   festivalEvents,
@@ -62,6 +63,7 @@ export default function Home() {
   const [ageFilter, setAgeFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [dateMenuOpen, setDateMenuOpen] = useState(false);
   const [draftVenue, setDraftVenue] = useState<number[]>([]);
   const [draftAge, setDraftAge] = useState<string | null>(null);
   const [draftQuery, setDraftQuery] = useState("");
@@ -116,6 +118,15 @@ export default function Home() {
   }, [filtersOpen]);
 
   useEffect(() => {
+    if (!dateMenuOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDateMenuOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [dateMenuOpen]);
+
+  useEffect(() => {
     lastPageScroll.current = window.scrollY;
     const handlePageScroll = () => {
       if (pageScrollFrame.current !== null) return;
@@ -123,7 +134,7 @@ export default function Home() {
         const nextScroll = window.scrollY;
         const movement = nextScroll - lastPageScroll.current;
 
-        if (filtersOpen || nextScroll < 48) {
+        if (filtersOpen || dateMenuOpen || nextScroll < 48) {
           setBottomNavHidden(false);
           lastPageScroll.current = nextScroll;
         } else if (movement > 7) {
@@ -146,7 +157,7 @@ export default function Home() {
         pageScrollFrame.current = null;
       }
     };
-  }, [filtersOpen]);
+  }, [dateMenuOpen, filtersOpen]);
 
   const { start: rangeStart, end: rangeEnd } = festivalBounds(day);
   const ticks = Array.from(
@@ -200,6 +211,107 @@ export default function Home() {
       ),
     [dayEvents],
   );
+  const suggestionEvents = useMemo(
+    () =>
+      dayEvents.filter((event) =>
+        matchesFilters(event, draftVenue, draftAge, ""),
+      ),
+    [dayEvents, draftAge, draftVenue],
+  );
+  const actualStarterSuggestions = useMemo(() => {
+    const rankedEvents = [...suggestionEvents].sort((a, b) => {
+      const rank = (event: FestivalEvent) => {
+        if (event.start <= selectedTime && event.end > selectedTime) {
+          return selectedTime - event.start;
+        }
+        if (event.start > selectedTime) {
+          return 10_000 + event.start - selectedTime;
+        }
+        return 20_000 + selectedTime - event.end;
+      };
+      return rank(a) - rank(b) || a.start - b.start;
+    });
+    const uniqueEvents = rankedEvents.filter(
+      (event, index) =>
+        rankedEvents.findIndex(
+          (item) =>
+            item.title.toLocaleLowerCase("ru") ===
+            event.title.toLocaleLowerCase("ru"),
+        ) === index,
+    );
+    const eventSuggestions = uniqueEvents.slice(0, 4).map((event) => ({
+      label: event.title,
+      meta: `${formatTime(event.start)} · ${event.kind}`,
+      type: "Спектакль",
+    }));
+
+    const companyCounts = new Map<string, number>();
+    suggestionEvents.forEach((event) => {
+      companyCounts.set(
+        event.company,
+        (companyCounts.get(event.company) ?? 0) + 1,
+      );
+    });
+    const companySuggestions = [...companyCounts]
+      .sort(
+        ([a, aCount], [b, bCount]) =>
+          bCount - aCount || a.localeCompare(b, "ru"),
+      )
+      .slice(0, 2)
+      .map(([label, count]) => ({
+        label,
+        meta: `${count} ${
+          count === 1
+            ? "событие"
+            : count >= 2 && count <= 4
+              ? "события"
+              : "событий"
+        } в программе`,
+        type: "Театр",
+      }));
+
+    return [...eventSuggestions, ...companySuggestions];
+  }, [selectedTime, suggestionEvents]);
+  const autocompleteSuggestions = useMemo(() => {
+    const normalizedQuery = draftQuery.trim().toLocaleLowerCase("ru");
+    if (!normalizedQuery) return [];
+
+    const candidates = [
+      ...suggestionEvents.map((event) => ({
+        label: event.title,
+        meta: event.kind,
+        type: "Спектакль",
+      })),
+      ...suggestionEvents.map((event) => ({
+        label: event.company,
+        meta: event.city ?? "Театр или коллектив",
+        type: "Театр",
+      })),
+    ];
+    const uniqueCandidates = candidates.filter(
+      (candidate, index) =>
+        candidates.findIndex(
+          (item) =>
+            item.label.toLocaleLowerCase("ru") ===
+            candidate.label.toLocaleLowerCase("ru"),
+        ) === index,
+    );
+
+    return uniqueCandidates
+      .filter((candidate) =>
+        candidate.label.toLocaleLowerCase("ru").includes(normalizedQuery),
+      )
+      .sort((a, b) => {
+        const aStarts = a.label
+          .toLocaleLowerCase("ru")
+          .startsWith(normalizedQuery);
+        const bStarts = b.label
+          .toLocaleLowerCase("ru")
+          .startsWith(normalizedQuery);
+        return Number(bStarts) - Number(aStarts) || a.label.length - b.label.length;
+      })
+      .slice(0, 5);
+  }, [draftQuery, suggestionEvents]);
 
   const visibleEvents = useMemo(() => {
     return dayEvents
@@ -246,6 +358,7 @@ export default function Home() {
 
   const changeDay = (nextDay: number) => {
     followCurrentTime.current = false;
+    setDateMenuOpen(false);
     setDay(nextDay);
     setSelectedTime(nextDay === 24 ? 20 * 60 : 14 * 60);
     setMode("active");
@@ -284,6 +397,7 @@ export default function Home() {
 
   const openFilters = () => {
     setBottomNavHidden(false);
+    setDateMenuOpen(false);
     setDraftVenue([...venueFilter]);
     setDraftAge(ageFilter);
     setDraftQuery(query);
@@ -967,23 +1081,67 @@ export default function Home() {
 
       <nav
         className={`mobile-bottom-nav ${
-          bottomNavHidden && !filtersOpen ? "is-hidden" : ""
+          bottomNavHidden && !filtersOpen && !dateMenuOpen ? "is-hidden" : ""
         }`}
         aria-label="Быстрая навигация"
       >
-        <label className="mobile-bottom-date">
-          <span aria-hidden="true">▦</span>
-          <strong>{day} июля</strong>
-          <select
-            value={day}
-            onChange={(event) => changeDay(Number(event.target.value))}
-            aria-label="Выберите день фестиваля"
+        {dateMenuOpen && (
+          <div
+            className="mobile-date-menu"
+            id="mobile-date-menu"
+            role="menu"
+            aria-label="Дни фестиваля"
           >
-            <option value={24}>Пт, 24 июля · открытие</option>
-            <option value={25}>Сб, 25 июля</option>
-            <option value={26}>Вс, 26 июля</option>
-          </select>
-        </label>
+            <div className="mobile-date-menu-heading">Выберите день</div>
+            {[24, 25, 26].map((value) => {
+              const selected = day === value;
+              return (
+                <button
+                  key={value}
+                  className={selected ? "selected" : ""}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selected}
+                  onClick={() => changeDay(value)}
+                >
+                  <span className="date-menu-weekday">
+                    {value === 24
+                      ? "Пятница"
+                      : value === 25
+                        ? "Суббота"
+                        : "Воскресенье"}
+                  </span>
+                  <span className="date-menu-date">{value} июля</span>
+                  <small>
+                    {value === festivalNow?.day
+                      ? value === 24
+                        ? "Сегодня · открытие"
+                        : "Сегодня · основная программа"
+                      : value === 24
+                        ? "Открытие"
+                        : "Основная программа"}
+                  </small>
+                  <i aria-hidden="true">
+                    {selected && <Check size={18} strokeWidth={2.6} />}
+                  </i>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <button
+          className={`mobile-bottom-date ${dateMenuOpen ? "is-open" : ""}`}
+          type="button"
+          aria-expanded={dateMenuOpen}
+          aria-controls="mobile-date-menu"
+          onClick={() => {
+            setBottomNavHidden(false);
+            setDateMenuOpen((current) => !current);
+          }}
+        >
+          <CalendarDays aria-hidden="true" size={20} strokeWidth={2.1} />
+          <strong>{day} июля</strong>
+        </button>
         <button
           onClick={openFilters}
           aria-expanded={filtersOpen}
@@ -993,6 +1151,15 @@ export default function Home() {
           Фильтры{filterCount ? <b>{filterCount}</b> : null}
         </button>
       </nav>
+
+      {dateMenuOpen && (
+        <button
+          className="mobile-date-menu-scrim"
+          type="button"
+          aria-label="Закрыть выбор дня"
+          onClick={() => setDateMenuOpen(false)}
+        />
+      )}
 
       {filtersOpen && (
         <div
@@ -1049,6 +1216,65 @@ export default function Home() {
                 </button>
               )}
             </div>
+
+            <section className="search-assist" aria-live="polite">
+              <div className="search-assist-heading">
+                <strong>
+                  {draftQuery.trim()
+                    ? "Подходящие варианты"
+                    : "Ближайшие из программы"}
+                </strong>
+                <span>{day} июля</span>
+              </div>
+              {draftQuery.trim() ? (
+                autocompleteSuggestions.length > 0 ? (
+                  <div className="search-suggestion-list">
+                    {autocompleteSuggestions.map((suggestion) => (
+                      <button
+                        key={`${suggestion.type}-${suggestion.label}`}
+                        onClick={() => setDraftQuery(suggestion.label)}
+                      >
+                        <span aria-hidden="true">
+                          {suggestion.type === "Спектакль" ? "◉" : "⌂"}
+                        </span>
+                        <span>
+                          <strong>{suggestion.label}</strong>
+                          <small>
+                            {suggestion.type} · {suggestion.meta}
+                          </small>
+                        </span>
+                        <i aria-hidden="true">↗</i>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="search-no-suggestions">
+                    В выбранной программе таких названий нет.
+                  </p>
+                )
+              ) : (
+                actualStarterSuggestions.length > 0 ? (
+                  <div className="search-suggestion-chips">
+                    {actualStarterSuggestions.map((suggestion) => (
+                      <button
+                        key={`${suggestion.type}-${suggestion.label}`}
+                        onClick={() => setDraftQuery(suggestion.label)}
+                        aria-label={`${suggestion.type}: ${suggestion.label}`}
+                      >
+                        <span aria-hidden="true">
+                          {suggestion.type === "Спектакль" ? "◉" : "⌂"}
+                        </span>
+                        <strong>{suggestion.label}</strong>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="search-no-suggestions">
+                    Для выбранных площадок и возраста вариантов нет.
+                  </p>
+                )
+              )}
+            </section>
 
             <div className="filter-list" aria-label="Параметры фильтрации">
               <label className="filter-list-row">
