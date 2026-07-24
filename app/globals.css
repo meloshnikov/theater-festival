@@ -90,27 +90,6 @@ input:focus-visible {
   backdrop-filter: blur(18px);
 }
 
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--ink);
-  font-weight: 850;
-  letter-spacing: -0.02em;
-  text-decoration: none;
-}
-
-.brand-mark {
-  width: 36px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  border-radius: 50% 50% 42% 50%;
-  background: var(--ink);
-  color: var(--yellow);
-  transform: rotate(-7deg);
-}
-
 .top-nav {
   display: flex;
   align-items: center;
