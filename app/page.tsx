@@ -447,12 +447,7 @@ export default function Home() {
   return (
     <main>
       <header className="site-header">
-        <a className="brand" href="#top" aria-label="В начало страницы">
-          <span className="brand-mark" aria-hidden="true">
-            ✦
-          </span>
-          <span>Елагин · театр</span>
-        </a>
+        <span aria-hidden="true" />
         <nav className="top-nav" aria-label="Основная навигация">
           <a className="active" href="#program">
             Программа
