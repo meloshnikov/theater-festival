@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Check, ChevronRight, X } from "lucide-react";
+import {
+  CalendarDays,
+  Check,
+  ChevronRight,
+  ListChecks,
+  Star,
+  X,
+} from "lucide-react";
 import {
   durationLabel,
   festivalEvents,
@@ -22,11 +29,25 @@ import type { FestivalEvent } from "./data";
 
 const RULER_STEP_MINUTES = 5;
 const RULER_STEP_WIDTH = 10;
+const FAVORITES_STORAGE_KEY = "elagin-festival-route:v1";
+
+function favoriteKey(day: number, eventId: string) {
+  return `${day}:${eventId}`;
+}
 
 function dayLabel(day: number) {
   if (day === 24) return "Пт, 24 июля";
   if (day === 25) return "Сб, 25 июля";
   return "Вс, 26 июля";
+}
+
+function eventCountLabel(count: number) {
+  const mod100 = count % 100;
+  const mod10 = count % 10;
+  if (mod100 >= 11 && mod100 <= 14) return "событий";
+  if (mod10 === 1) return "событие";
+  if (mod10 >= 2 && mod10 <= 4) return "события";
+  return "событий";
 }
 
 function matchesFilters(
@@ -71,6 +92,10 @@ export default function Home() {
   const [bottomNavHidden, setBottomNavHidden] = useState(false);
   const [festivalNow, setFestivalNow] = useState<FestivalMoment | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<FestivalEvent | null>(null);
+  const [favoriteKeys, setFavoriteKeys] = useState<string[]>([]);
+  const [favoritesReady, setFavoritesReady] = useState(false);
+  const [routeMode, setRouteMode] = useState(false);
+  const [routeNotice, setRouteNotice] = useState("");
   const rulerRef = useRef<HTMLDivElement>(null);
   const rulerMarkerRef = useRef<HTMLDivElement>(null);
   const rulerFrame = useRef<number | null>(null);
@@ -81,6 +106,60 @@ export default function Home() {
   const followCurrentTime = useRef(true);
   const lastPageScroll = useRef(0);
   const pageScrollFrame = useRef<number | null>(null);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(FAVORITES_STORAGE_KEY);
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setFavoriteKeys(
+            parsed.filter((value): value is string => typeof value === "string"),
+          );
+        }
+      }
+    } catch {
+      window.localStorage.removeItem(FAVORITES_STORAGE_KEY);
+    } finally {
+      setFavoritesReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!favoritesReady) return;
+    try {
+      window.localStorage.setItem(
+        FAVORITES_STORAGE_KEY,
+        JSON.stringify(favoriteKeys),
+      );
+    } catch {
+      // Маршрут продолжит работать в текущей вкладке, даже если хранилище закрыто.
+    }
+  }, [favoriteKeys, favoritesReady]);
+
+  useEffect(() => {
+    const syncFavorites = (event: StorageEvent) => {
+      if (event.key !== FAVORITES_STORAGE_KEY) return;
+      try {
+        const parsed: unknown = event.newValue ? JSON.parse(event.newValue) : [];
+        if (Array.isArray(parsed)) {
+          setFavoriteKeys(
+            parsed.filter((value): value is string => typeof value === "string"),
+          );
+        }
+      } catch {
+        setFavoriteKeys([]);
+      }
+    };
+    window.addEventListener("storage", syncFavorites);
+    return () => window.removeEventListener("storage", syncFavorites);
+  }, []);
+
+  useEffect(() => {
+    if (!routeNotice) return;
+    const timer = window.setTimeout(() => setRouteNotice(""), 1800);
+    return () => window.clearTimeout(timer);
+  }, [routeNotice]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -329,14 +408,56 @@ export default function Home() {
       .slice(0, 5);
   }, [draftQuery, suggestionEvents]);
 
+  const favoriteEvents = useMemo(
+    () =>
+      dayEvents
+        .filter((event) =>
+          favoriteKeys.includes(favoriteKey(day, event.id)),
+        )
+        .sort((a, b) => a.start - b.start || (a.venue ?? 0) - (b.venue ?? 0)),
+    [day, dayEvents, favoriteKeys],
+  );
+
   const visibleEvents = useMemo(() => {
+    if (routeMode) return favoriteEvents;
     return dayEvents
       .filter((event) => {
         if (!matchesFilters(event, venueFilter, ageFilter, query)) return false;
         return eventMatchesTimeMode(event, mode, selectedTime);
       })
       .sort((a, b) => a.start - b.start || (a.venue ?? 0) - (b.venue ?? 0));
-  }, [ageFilter, dayEvents, mode, query, selectedTime, venueFilter]);
+  }, [
+    ageFilter,
+    dayEvents,
+    favoriteEvents,
+    mode,
+    query,
+    routeMode,
+    selectedTime,
+    venueFilter,
+  ]);
+
+  const routeConflicts = useMemo(() => {
+    const conflicts = new Map<string, FestivalEvent[]>();
+    favoriteEvents.forEach((event) => {
+      const matches = favoriteEvents.filter(
+        (other) =>
+          other.id !== event.id &&
+          other.start < event.end &&
+          other.end > event.start,
+      );
+      if (matches.length) conflicts.set(event.id, matches);
+    });
+    return conflicts;
+  }, [favoriteEvents]);
+
+  const nextRouteEventId = useMemo(() => {
+    if (!festivalNow || day !== festivalNow.day) return null;
+    return (
+      favoriteEvents.find((event) => event.end > festivalNow.rulerTime)?.id ??
+      null
+    );
+  }, [day, favoriteEvents, festivalNow]);
 
   const draftVisibleCount = useMemo(
     () =>
@@ -372,6 +493,45 @@ export default function Home() {
     festivalNow !== null &&
     (day !== festivalNow.day || selectedTime !== festivalNow.rulerTime);
 
+  const isFavorite = (event: FestivalEvent) =>
+    favoriteKeys.includes(favoriteKey(day, event.id));
+
+  const toggleFavorite = (event: FestivalEvent) => {
+    const key = favoriteKey(day, event.id);
+    const removing = favoriteKeys.includes(key);
+    setFavoriteKeys((current) => {
+      const next = removing
+        ? current.filter((value) => value !== key)
+        : [...current, key];
+      try {
+        window.localStorage.setItem(
+          FAVORITES_STORAGE_KEY,
+          JSON.stringify(next),
+        );
+      } catch {
+        // В приватном режиме состояние останется доступно до закрытия вкладки.
+      }
+      return next;
+    });
+    setRouteNotice(
+      removing ? "Удалено из маршрута" : "Добавлено в маршрут",
+    );
+    if (typeof navigator.vibrate === "function") navigator.vibrate(8);
+  };
+
+  const showRoute = () => {
+    setBottomNavHidden(false);
+    setDateMenuOpen(false);
+    setFiltersOpen(false);
+    setRouteMode(true);
+    document.getElementById("program")?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const showProgram = () => {
+    setRouteMode(false);
+    setBottomNavHidden(false);
+  };
+
   const changeDay = (nextDay: number) => {
     followCurrentTime.current = false;
     setDateMenuOpen(false);
@@ -382,6 +542,7 @@ export default function Home() {
   };
 
   const toggleVenue = (venue: number) => {
+    setRouteMode(false);
     setVenueFilter((current) =>
       current.includes(venue)
         ? current.filter((id) => id !== venue)
@@ -391,6 +552,7 @@ export default function Home() {
   };
 
   const showOnMap = (venue: number) => {
+    setRouteMode(false);
     setVenueFilter([venue]);
     if (window.matchMedia("(max-width: 780px)").matches) {
       setMode("all");
@@ -407,11 +569,13 @@ export default function Home() {
   };
 
   const showAllProgram = () => {
+    setRouteMode(false);
     resetFilters();
     setMode("all");
   };
 
   const openFilters = () => {
+    setRouteMode(false);
     setBottomNavHidden(false);
     setDateMenuOpen(false);
     setDraftVenue([...venueFilter]);
@@ -582,6 +746,7 @@ export default function Home() {
       setSelectedTime(moment.rulerTime);
       setMode("active");
       setVenueFilter([]);
+      setRouteMode(false);
     }
   };
 
@@ -601,7 +766,10 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="mobile-cockpit" aria-label="Навигация по программе">
+      <section
+        className={`mobile-cockpit ${routeMode ? "route-mode-hidden" : ""}`}
+        aria-label="Навигация по программе"
+      >
         <div className="mobile-time-value" aria-live="polite">
           <span>Выбранное время</span>
           <strong>{formatTime(selectedTime)}</strong>
@@ -700,7 +868,10 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="time-console" aria-label="Выбор времени">
+      <section
+        className={`time-console ${routeMode ? "route-mode-hidden" : ""}`}
+        aria-label="Выбор времени"
+      >
         <div className="time-labels" aria-hidden="true">
           {ticks.map((hour) => (
             <span key={hour}>{hour === 24 ? "00:00" : `${hour}:00`}</span>
@@ -759,28 +930,56 @@ export default function Home() {
           <div className="program-heading">
             <div>
               <p className="section-kicker">
-                {day === 24 ? "Открытие фестиваля" : "Основная программа"}
+                {routeMode
+                  ? "Сохранено на этом телефоне"
+                  : day === 24
+                    ? "Открытие фестиваля"
+                    : "Основная программа"}
               </p>
               <h2>
-                {mode === "active"
+                {routeMode
+                  ? "Мой маршрут"
+                  : mode === "active"
                   ? `Идут в ${formatTime(selectedTime)}`
                   : mode === "soon"
                     ? "Начнутся в течение часа"
                     : `Все события ${day} июля`}
               </h2>
             </div>
-            <label className="search">
-              <span className="sr-only">Поиск спектакля или театра</span>
-              <span aria-hidden="true">⌕</span>
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Спектакль или театр"
-              />
-            </label>
+            <div className="program-heading-actions">
+              <button
+                className={`route-desktop-button ${routeMode ? "selected" : ""}`}
+                data-testid="route-desktop"
+                type="button"
+                onClick={routeMode ? showProgram : showRoute}
+                aria-pressed={routeMode}
+              >
+                <Star
+                  size={18}
+                  strokeWidth={2.1}
+                  fill={routeMode ? "currentColor" : "none"}
+                />
+                Мой маршрут
+                {favoriteEvents.length > 0 && <b>{favoriteEvents.length}</b>}
+              </button>
+              {!routeMode && (
+                <label className="search">
+                  <span className="sr-only">Поиск спектакля или театра</span>
+                  <span aria-hidden="true">⌕</span>
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Спектакль или театр"
+                  />
+                </label>
+              )}
+            </div>
           </div>
 
-          <div className="filter-row" aria-label="Фильтр по времени">
+          <div
+            className={`filter-row ${routeMode ? "route-hidden" : ""}`}
+            aria-label="Фильтр по времени"
+          >
             <button
               className={mode === "active" ? "selected" : ""}
               onClick={() => setMode("active")}
@@ -801,7 +1000,12 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="age-filter desktop-filters" aria-label="Фильтр по возрасту">
+          <div
+            className={`age-filter desktop-filters ${
+              routeMode ? "route-hidden" : ""
+            }`}
+            aria-label="Фильтр по возрасту"
+          >
             <span>Возраст:</span>
             <button
               className={ageFilter === null ? "selected" : ""}
@@ -820,7 +1024,12 @@ export default function Home() {
             ))}
           </div>
 
-          <div className="venue-strip desktop-filters" aria-label="Фильтр по площадке">
+          <div
+            className={`venue-strip desktop-filters ${
+              routeMode ? "route-hidden" : ""
+            }`}
+            aria-label="Фильтр по площадке"
+          >
             <button
               className={venueFilter.length === 0 ? "selected" : ""}
               onClick={() => setVenueFilter([])}
@@ -847,36 +1056,46 @@ export default function Home() {
             ))}
           </div>
 
-          <div className="results-line">
+          {routeMode && (
+            <div className="route-mobile-heading">
+              <span>Мой маршрут</span>
+              <strong>{day} июля</strong>
+              <button type="button" onClick={showProgram}>
+                Все события
+              </button>
+            </div>
+          )}
+
+          <div className={`results-line ${routeMode ? "is-route" : ""}`}>
             <span className="desktop-result-count">
-              {visibleEvents.length}{" "}
-              {visibleEvents.length === 1 ? "событие" : "событий"}
+              {visibleEvents.length} {eventCountLabel(visibleEvents.length)}
             </span>
-            <label className="mobile-view-picker">
-              <span>{mobileModeLabel}</span>
-              <i aria-hidden="true">⌄</i>
-              <select
-                value={mode}
-                onChange={(event) =>
-                  setMode(event.target.value as TimeMode)
-                }
-                aria-label="Выберите период показа"
-              >
-                <option value="active">Идут сейчас</option>
-                <option value="soon">В течение часа</option>
-                <option value="all">Весь день</option>
-              </select>
-            </label>
+            {!routeMode && (
+              <label className="mobile-view-picker">
+                <span>{mobileModeLabel}</span>
+                <i aria-hidden="true">⌄</i>
+                <select
+                  value={mode}
+                  onChange={(event) =>
+                    setMode(event.target.value as TimeMode)
+                  }
+                  aria-label="Выберите период показа"
+                >
+                  <option value="active">Идут сейчас</option>
+                  <option value="soon">В течение часа</option>
+                  <option value="all">Весь день</option>
+                </select>
+              </label>
+            )}
             <span className="mobile-result-count">
-              {visibleEvents.length}{" "}
-              {visibleEvents.length === 1 ? "событие" : "событий"}
+              {visibleEvents.length} {eventCountLabel(visibleEvents.length)}
             </span>
-            {(venueFilter.length > 0 || ageFilter || query) && (
+            {!routeMode && (venueFilter.length > 0 || ageFilter || query) && (
               <button onClick={resetFilters}>Сбросить фильтры</button>
             )}
           </div>
 
-          {filterCount > 0 && (
+          {!routeMode && filterCount > 0 && (
             <div className="active-filter-chips" aria-label="Активные фильтры">
               {query.trim() && (
                 <button onClick={() => setQuery("")}>
@@ -918,9 +1137,24 @@ export default function Home() {
                   event.start <= selectedTime && event.end > selectedTime;
                 const status = eventLiveStatus(event, day, festivalNow);
                 const isLive = status === "Идёт";
+                const favorite = isFavorite(event);
+                const conflicts = routeConflicts.get(event.id) ?? [];
+                const routePast =
+                  routeMode &&
+                  festivalNow !== null &&
+                  day === festivalNow.day &&
+                  event.end <= festivalNow.rulerTime;
+                const routeNext = routeMode && event.id === nextRouteEventId;
+                const routeFocusIsLive =
+                  routeNext &&
+                  festivalNow !== null &&
+                  event.start <= festivalNow.rulerTime &&
+                  event.end > festivalNow.rulerTime;
                 return (
                   <article
-                    className={`event-card ${isActive ? "is-active" : ""}`}
+                    className={`event-card ${isActive ? "is-active" : ""} ${
+                      routePast ? "route-past" : ""
+                    } ${routeNext ? "route-next" : ""}`}
                     key={event.id}
                     data-start={formatTime(event.start)}
                   >
@@ -941,9 +1175,35 @@ export default function Home() {
                       <strong>
                         {formatTime(event.start)}–{formatTime(event.end)}
                       </strong>
-                      <div className="event-card-cue" aria-hidden="true">
-                        <span>{durationLabel(event.start, event.end)}</span>
-                        <ChevronRight size={17} strokeWidth={2.4} />
+                      <div className="event-card-actions">
+                        <button
+                          className={`favorite-button ${
+                            favorite ? "selected" : ""
+                          }`}
+                          data-testid={`favorite-${day}-${event.id}`}
+                          type="button"
+                          disabled={!favoritesReady}
+                          aria-pressed={favorite}
+                          aria-label={
+                            favorite
+                              ? `Убрать «${event.title}» из маршрута`
+                              : `Добавить «${event.title}» в маршрут`
+                          }
+                          onClick={(clickEvent) => {
+                            clickEvent.stopPropagation();
+                            toggleFavorite(event);
+                          }}
+                        >
+                          <Star
+                            size={18}
+                            strokeWidth={2.2}
+                            fill={favorite ? "currentColor" : "none"}
+                          />
+                        </button>
+                        <div className="event-card-cue" aria-hidden="true">
+                          <span>{durationLabel(event.start, event.end)}</span>
+                          <ChevronRight size={17} strokeWidth={2.4} />
+                        </div>
                       </div>
                     </div>
                     <div className="event-meta">
@@ -958,6 +1218,20 @@ export default function Home() {
                       )}
                     </p>
                     {event.note && <p className="event-note">{event.note}</p>}
+                    {routeMode && conflicts.length > 0 && (
+                      <p className="route-conflict">
+                        <span aria-hidden="true">!</span>
+                        Пересекается с «{conflicts[0].title}»
+                      </p>
+                    )}
+                    {routeNext && (
+                      <p className="route-next-label">
+                        <ListChecks size={14} aria-hidden="true" />
+                        {routeFocusIsLive
+                          ? "Сейчас в вашем маршруте"
+                          : "Следующее в вашем маршруте"}
+                      </p>
+                    )}
                     <div className="event-footer">
                       {venue ? (
                         <button
@@ -994,11 +1268,21 @@ export default function Home() {
               })}
             </div>
           ) : (
-            <div className="empty-state">
-              <span aria-hidden="true">◎</span>
-              <h3>Ничего не найдено</h3>
-              <p>Измените время, возраст, площадку или поисковый запрос.</p>
-              <button onClick={showAllProgram}>Показать всю программу</button>
+            <div className={`empty-state ${routeMode ? "route-empty" : ""}`}>
+              <span aria-hidden="true">{routeMode ? "☆" : "◎"}</span>
+              <h3>
+                {routeMode
+                  ? `Маршрут на ${day} июля пока пуст`
+                  : "Ничего не найдено"}
+              </h3>
+              <p>
+                {routeMode
+                  ? "Нажимайте на звёздочку у выступлений — выбор сохранится на этом телефоне."
+                  : "Измените время, возраст, площадку или поисковый запрос."}
+              </p>
+              <button onClick={routeMode ? showProgram : showAllProgram}>
+                {routeMode ? "Выбрать выступления" : "Показать всю программу"}
+              </button>
             </div>
           )}
         </div>
@@ -1217,8 +1501,24 @@ export default function Home() {
             </div>
 
             <div className="event-detail-actions">
-              <button type="button" onClick={closeEventDetails}>
-                Вернуться к программе
+              <button
+                className={`event-detail-favorite ${
+                  isFavorite(selectedEvent) ? "selected" : ""
+                }`}
+                type="button"
+                disabled={!favoritesReady}
+                aria-pressed={isFavorite(selectedEvent)}
+                onClick={() => toggleFavorite(selectedEvent)}
+              >
+                <Star
+                  size={19}
+                  strokeWidth={2.2}
+                  fill={isFavorite(selectedEvent) ? "currentColor" : "none"}
+                  aria-hidden="true"
+                />
+                {isFavorite(selectedEvent)
+                  ? "В моём маршруте"
+                  : "Добавить в маршрут"}
               </button>
               <span>{selectedEvent.age}</span>
             </div>
@@ -1294,6 +1594,22 @@ export default function Home() {
           <strong>{day} июля</strong>
         </button>
         <button
+          className={`mobile-route-button ${routeMode ? "selected" : ""}`}
+          data-testid="route-mobile"
+          type="button"
+          aria-pressed={routeMode}
+          onClick={routeMode ? showProgram : showRoute}
+        >
+          <Star
+            aria-hidden="true"
+            size={20}
+            strokeWidth={2.1}
+            fill={routeMode ? "currentColor" : "none"}
+          />
+          Мой маршрут
+          {favoriteEvents.length ? <b>{favoriteEvents.length}</b> : null}
+        </button>
+        <button
           onClick={openFilters}
           aria-expanded={filtersOpen}
           aria-controls="mobile-filters"
@@ -1302,6 +1618,14 @@ export default function Home() {
           Фильтры{filterCount ? <b>{filterCount}</b> : null}
         </button>
       </nav>
+
+      <div
+        className={`route-toast ${routeNotice ? "is-visible" : ""}`}
+        role="status"
+        aria-live="polite"
+      >
+        {routeNotice}
+      </div>
 
       {dateMenuOpen && (
         <button
