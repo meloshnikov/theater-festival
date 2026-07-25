@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Check } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, X } from "lucide-react";
 import {
   durationLabel,
   festivalEvents,
   formatTime,
   venues,
 } from "./data";
+import { getEventDescription } from "./descriptions";
 import {
   eventLiveStatus,
   eventMatchesTimeMode,
@@ -69,6 +70,7 @@ export default function Home() {
   const [draftQuery, setDraftQuery] = useState("");
   const [bottomNavHidden, setBottomNavHidden] = useState(false);
   const [festivalNow, setFestivalNow] = useState<FestivalMoment | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<FestivalEvent | null>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
   const rulerMarkerRef = useRef<HTMLDivElement>(null);
   const rulerFrame = useRef<number | null>(null);
@@ -125,6 +127,20 @@ export default function Home() {
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [dateMenuOpen]);
+
+  useEffect(() => {
+    if (!selectedEvent) return;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedEvent(null);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [selectedEvent]);
 
   useEffect(() => {
     lastPageScroll.current = window.scrollY;
@@ -402,6 +418,17 @@ export default function Home() {
     setDraftAge(ageFilter);
     setDraftQuery(query);
     setFiltersOpen(true);
+  };
+
+  const openEventDetails = (event: FestivalEvent) => {
+    setDateMenuOpen(false);
+    setBottomNavHidden(true);
+    setSelectedEvent(event);
+  };
+
+  const closeEventDetails = () => {
+    setSelectedEvent(null);
+    setBottomNavHidden(false);
   };
 
   const resetDraftFilters = () => {
@@ -897,6 +924,15 @@ export default function Home() {
                     key={event.id}
                     data-start={formatTime(event.start)}
                   >
+                    <button
+                      className="event-card-open"
+                      type="button"
+                      aria-haspopup="dialog"
+                      aria-label={`Подробнее: ${event.title}, ${formatTime(
+                        event.start,
+                      )}–${formatTime(event.end)}`}
+                      onClick={() => openEventDetails(event)}
+                    />
                     <div className="event-rail" aria-hidden="true">
                       <time>{formatTime(event.start)}</time>
                       <span />
@@ -905,7 +941,10 @@ export default function Home() {
                       <strong>
                         {formatTime(event.start)}–{formatTime(event.end)}
                       </strong>
-                      <span>{durationLabel(event.start, event.end)}</span>
+                      <div className="event-card-cue" aria-hidden="true">
+                        <span>{durationLabel(event.start, event.end)}</span>
+                        <ChevronRight size={17} strokeWidth={2.4} />
+                      </div>
                     </div>
                     <div className="event-meta">
                       <span>{event.kind}</span>
@@ -923,7 +962,11 @@ export default function Home() {
                       {venue ? (
                         <button
                           className="venue-link"
-                          onClick={() => showOnMap(venue.id)}
+                          type="button"
+                          onClick={(clickEvent) => {
+                            clickEvent.stopPropagation();
+                            showOnMap(venue.id);
+                          }}
                           style={
                             {
                               "--venue-color": venue.color,
@@ -1079,9 +1122,117 @@ export default function Home() {
         </a>
       </footer>
 
+      {selectedEvent && (
+        <div
+          className="event-detail-backdrop"
+          role="presentation"
+          onMouseDown={(mouseEvent) => {
+            if (mouseEvent.currentTarget === mouseEvent.target) {
+              closeEventDetails();
+            }
+          }}
+        >
+          <section
+            className="event-detail-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="event-detail-title"
+            style={
+              {
+                "--detail-color":
+                  selectedEvent.venue !== null
+                    ? venues[selectedEvent.venue - 1].color
+                    : "var(--coral)",
+              } as React.CSSProperties
+            }
+          >
+            <div className="event-detail-accent" aria-hidden="true" />
+            <div className="event-detail-scroll">
+              <header className="event-detail-toolbar">
+                <strong>
+                  {day} июля · {formatTime(selectedEvent.start)}–
+                  {formatTime(selectedEvent.end)}
+                </strong>
+                <button
+                  type="button"
+                  onClick={closeEventDetails}
+                  aria-label="Закрыть описание"
+                >
+                  <X size={20} strokeWidth={2.2} />
+                </button>
+              </header>
+
+              <div className="event-detail-heading">
+                <p>{selectedEvent.kind}</p>
+                <h2 id="event-detail-title">{selectedEvent.title}</h2>
+                <div className="event-detail-credits">
+                  <strong>{selectedEvent.company}</strong>
+                  {selectedEvent.city && <span>{selectedEvent.city}</span>}
+                </div>
+              </div>
+
+              <div className="event-detail-facts">
+                {selectedEvent.venue !== null ? (
+                  <>
+                    <span
+                      className="event-detail-venue-number"
+                      aria-label={`Площадка ${selectedEvent.venue}`}
+                    >
+                      {selectedEvent.venue}
+                    </span>
+                    <div>
+                      <small>Площадка</small>
+                      <strong>{venues[selectedEvent.venue - 1].name}</strong>
+                      {selectedEvent.place && (
+                        <span>{selectedEvent.place}</span>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span
+                      className="event-detail-venue-number is-route"
+                      aria-hidden="true"
+                    >
+                      ◉
+                    </span>
+                    <div>
+                      <small>Место старта</small>
+                      <strong>
+                        {selectedEvent.place ?? "Маршрут фестиваля"}
+                      </strong>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="event-detail-description">
+                <p className="event-detail-kicker">О событии</p>
+                {getEventDescription(selectedEvent.title)
+                  .split("\n\n")
+                  .map((paragraph) => (
+                    <p key={paragraph}>{paragraph}</p>
+                  ))}
+              </div>
+            </div>
+
+            <div className="event-detail-actions">
+              <button type="button" onClick={closeEventDetails}>
+                Вернуться к программе
+              </button>
+              <span>{selectedEvent.age}</span>
+            </div>
+          </section>
+        </div>
+      )}
+
       <nav
         className={`mobile-bottom-nav ${
-          bottomNavHidden && !filtersOpen && !dateMenuOpen ? "is-hidden" : ""
+          (bottomNavHidden || selectedEvent) &&
+          !filtersOpen &&
+          !dateMenuOpen
+            ? "is-hidden"
+            : ""
         }`}
         aria-label="Быстрая навигация"
       >
