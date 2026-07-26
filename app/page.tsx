@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
   Check,
-  ChevronRight,
   ListChecks,
   Star,
   X,
@@ -1171,43 +1170,44 @@ export default function Home() {
                       <time>{formatTime(event.start)}</time>
                       <span />
                     </div>
+                    <button
+                      className={`favorite-button ${
+                        favorite ? "selected" : ""
+                      }`}
+                      data-testid={`favorite-${day}-${event.id}`}
+                      type="button"
+                      disabled={!favoritesReady}
+                      aria-pressed={favorite}
+                      aria-label={
+                        favorite
+                          ? `Убрать «${event.title}» из маршрута`
+                          : `Добавить «${event.title}» в маршрут`
+                      }
+                      onClick={(clickEvent) => {
+                        clickEvent.stopPropagation();
+                        toggleFavorite(event);
+                      }}
+                    >
+                      <Star
+                        size={20}
+                        strokeWidth={2.1}
+                        fill={favorite ? "currentColor" : "none"}
+                      />
+                    </button>
                     <div className="event-topline">
                       <strong>
                         {formatTime(event.start)}–{formatTime(event.end)}
                       </strong>
-                      <div className="event-card-actions">
-                        <button
-                          className={`favorite-button ${
-                            favorite ? "selected" : ""
-                          }`}
-                          data-testid={`favorite-${day}-${event.id}`}
-                          type="button"
-                          disabled={!favoritesReady}
-                          aria-pressed={favorite}
-                          aria-label={
-                            favorite
-                              ? `Убрать «${event.title}» из маршрута`
-                              : `Добавить «${event.title}» в маршрут`
-                          }
-                          onClick={(clickEvent) => {
-                            clickEvent.stopPropagation();
-                            toggleFavorite(event);
-                          }}
-                        >
-                          <Star
-                            size={18}
-                            strokeWidth={2.2}
-                            fill={favorite ? "currentColor" : "none"}
-                          />
-                        </button>
-                        <div className="event-card-cue" aria-hidden="true">
-                          <span>{durationLabel(event.start, event.end)}</span>
-                          <ChevronRight size={17} strokeWidth={2.4} />
-                        </div>
-                      </div>
+                      <span className="event-duration">
+                        {durationLabel(event.start, event.end)}
+                      </span>
                     </div>
                     <div className="event-meta">
                       <span>{event.kind}</span>
+                      <span
+                        className="event-meta-separator"
+                        aria-hidden="true"
+                      />
                       <b>{event.age}</b>
                     </div>
                     <h3>{event.title}</h3>
@@ -1277,7 +1277,7 @@ export default function Home() {
               </h3>
               <p>
                 {routeMode
-                  ? "Нажимайте на звёздочку у выступлений — выбор сохранится на этом телефоне."
+                  ? "Нажимайте на звёздочку у выступлений — выбор сохранится на этом устройстве."
                   : "Измените время, возраст, площадку или поисковый запрос."}
               </p>
               <button onClick={routeMode ? showProgram : showAllProgram}>
