@@ -4,10 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
   Check,
+  Copy,
   ListChecks,
+  Share2,
   Star,
   X,
 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import {
   durationLabel,
   festivalEvents,
@@ -29,9 +32,65 @@ import type { FestivalEvent } from "./data";
 const RULER_STEP_MINUTES = 5;
 const RULER_STEP_WIDTH = 10;
 const FAVORITES_STORAGE_KEY = "elagin-festival-route:v1";
+const SHARED_ROUTE_HASH_PREFIX = "#route=v1.";
 
 function favoriteKey(day: number, eventId: string) {
   return `${day}:${eventId}`;
+}
+
+const VALID_FAVORITE_KEYS = new Set(
+  festivalEvents.flatMap((event) =>
+    event.days.map((eventDay) => favoriteKey(eventDay, event.id)),
+  ),
+);
+
+function sanitizeRouteKeys(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value.filter(
+        (item): item is string =>
+          typeof item === "string" && VALID_FAVORITE_KEYS.has(item),
+      ),
+    ),
+  ].slice(0, VALID_FAVORITE_KEYS.size);
+}
+
+function encodeSharedRoute(keys: string[]) {
+  const bytes = new TextEncoder().encode(JSON.stringify(sanitizeRouteKeys(keys)));
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return window
+    .btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+}
+
+function decodeSharedRoute(hash: string) {
+  if (!hash.startsWith(SHARED_ROUTE_HASH_PREFIX)) return null;
+  try {
+    const encoded = hash.slice(SHARED_ROUTE_HASH_PREFIX.length);
+    const base64 = encoded.replaceAll("-", "+").replaceAll("_", "/");
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+    const binary = window.atob(padded);
+    const bytes = Uint8Array.from(binary, (character) =>
+      character.charCodeAt(0),
+    );
+    return sanitizeRouteKeys(
+      JSON.parse(new TextDecoder().decode(bytes)) as unknown,
+    );
+  } catch {
+    return [];
+  }
+}
+
+function routeDays(keys: string[]) {
+  return [...new Set(keys.map((key) => Number(key.split(":", 1)[0])))]
+    .filter((value) => [24, 25, 26].includes(value))
+    .sort((a, b) => a - b);
 }
 
 function dayLabel(day: number) {
@@ -95,6 +154,14 @@ export default function Home() {
   const [favoritesReady, setFavoritesReady] = useState(false);
   const [routeMode, setRouteMode] = useState(false);
   const [routeNotice, setRouteNotice] = useState("");
+  const [incomingRouteKeys, setIncomingRouteKeys] = useState<string[] | null>(
+    null,
+  );
+  const [previewRouteKeys, setPreviewRouteKeys] = useState<string[] | null>(
+    null,
+  );
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [shareUrl, setShareUrl] = useState("");
   const rulerRef = useRef<HTMLDivElement>(null);
   const rulerMarkerRef = useRef<HTMLDivElement>(null);
   const rulerFrame = useRef<number | null>(null);
@@ -122,6 +189,16 @@ export default function Home() {
     } finally {
       setFavoritesReady(true);
     }
+  }, []);
+
+  useEffect(() => {
+    const sharedKeys = decodeSharedRoute(window.location.hash);
+    if (sharedKeys === null) return;
+    if (sharedKeys.length === 0) {
+      setRouteNotice("Не удалось открыть маршрут из ссылки");
+      return;
+    }
+    setIncomingRouteKeys(sharedKeys);
   }, []);
 
   useEffect(() => {
@@ -219,6 +296,42 @@ export default function Home() {
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [selectedEvent]);
+
+  useEffect(() => {
+    if (!incomingRouteKeys) return;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setIncomingRouteKeys(null);
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${window.location.search}`,
+      );
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [incomingRouteKeys]);
+
+  useEffect(() => {
+    if (!shareDialogOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setShareDialogOpen(false);
+      setBottomNavHidden(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [shareDialogOpen]);
 
   useEffect(() => {
     lastPageScroll.current = window.scrollY;
@@ -407,14 +520,15 @@ export default function Home() {
       .slice(0, 5);
   }, [draftQuery, suggestionEvents]);
 
+  const displayedRouteKeys = previewRouteKeys ?? favoriteKeys;
   const favoriteEvents = useMemo(
     () =>
       dayEvents
         .filter((event) =>
-          favoriteKeys.includes(favoriteKey(day, event.id)),
+          displayedRouteKeys.includes(favoriteKey(day, event.id)),
         )
         .sort((a, b) => a.start - b.start || (a.venue ?? 0) - (b.venue ?? 0)),
-    [day, dayEvents, favoriteKeys],
+    [day, dayEvents, displayedRouteKeys],
   );
 
   const visibleEvents = useMemo(() => {
@@ -491,6 +605,14 @@ export default function Home() {
     currentTimeAvailable &&
     festivalNow !== null &&
     (day !== festivalNow.day || selectedTime !== festivalNow.rulerTime);
+  const shareHost = useMemo(() => {
+    if (!shareUrl) return "";
+    try {
+      return new URL(shareUrl).host;
+    } catch {
+      return "";
+    }
+  }, [shareUrl]);
 
   const isFavorite = (event: FestivalEvent) =>
     favoriteKeys.includes(favoriteKey(day, event.id));
@@ -519,6 +641,7 @@ export default function Home() {
   };
 
   const showRoute = () => {
+    setPreviewRouteKeys(null);
     setBottomNavHidden(false);
     setDateMenuOpen(false);
     setFiltersOpen(false);
@@ -527,8 +650,114 @@ export default function Home() {
   };
 
   const showProgram = () => {
+    setPreviewRouteKeys(null);
     setRouteMode(false);
     setBottomNavHidden(false);
+  };
+
+  const clearSharedRouteHash = () => {
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${window.location.search}`,
+    );
+  };
+
+  const previewIncomingRoute = () => {
+    if (!incomingRouteKeys?.length) return;
+    const firstDay = routeDays(incomingRouteKeys)[0];
+    if (firstDay) changeDay(firstDay);
+    setPreviewRouteKeys(incomingRouteKeys);
+    setIncomingRouteKeys(null);
+    setRouteMode(true);
+    clearSharedRouteHash();
+    window.setTimeout(() => {
+      document.getElementById("program")?.scrollIntoView({ behavior: "smooth" });
+    }, 0);
+  };
+
+  const mergeRouteKeys = (keys: string[]) => {
+    const next = [
+      ...new Set([...favoriteKeys, ...sanitizeRouteKeys(keys)]),
+    ];
+    setFavoriteKeys(next);
+    try {
+      window.localStorage.setItem(
+        FAVORITES_STORAGE_KEY,
+        JSON.stringify(next),
+      );
+    } catch {
+      // Маршрут останется доступен в текущей вкладке.
+    }
+    setPreviewRouteKeys(null);
+    setIncomingRouteKeys(null);
+    setRouteMode(true);
+    clearSharedRouteHash();
+    setRouteNotice("Маршрут добавлен к вашему");
+  };
+
+  const buildShareUrl = () => {
+    const url = new URL(window.location.href);
+    url.hash = `${SHARED_ROUTE_HASH_PREFIX.slice(1)}${encodeSharedRoute(
+      favoriteKeys,
+    )}`;
+    return url.toString();
+  };
+
+  const copyText = async (value: string) => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const field = document.createElement("textarea");
+    field.value = value;
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.appendChild(field);
+    field.select();
+    document.execCommand("copy");
+    field.remove();
+  };
+
+  const shareRoute = () => {
+    if (!favoriteKeys.length) {
+      setRouteNotice("Сначала добавьте выступления в маршрут");
+      return;
+    }
+    setShareUrl(buildShareUrl());
+    setShareDialogOpen(true);
+    setBottomNavHidden(true);
+  };
+
+  const copyRouteLink = async () => {
+    try {
+      await copyText(shareUrl);
+      setRouteNotice("Ссылка на маршрут скопирована");
+    } catch {
+      setRouteNotice("Не удалось скопировать ссылку");
+    }
+  };
+
+  const shareRouteViaApps = async () => {
+    const count = favoriteKeys.length;
+    const title = "Мой маршрут фестиваля «Елагин парк»";
+    const text = `${title} · ${count} ${eventCountLabel(count)}`;
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share({ title, text, url: shareUrl });
+        return;
+      }
+      await copyText(shareUrl);
+      setRouteNotice("Ссылка на маршрут скопирована");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      try {
+        await copyText(shareUrl);
+        setRouteNotice("Ссылка на маршрут скопирована");
+      } catch {
+        setRouteNotice("Не удалось скопировать ссылку");
+      }
+    }
   };
 
   const changeDay = (nextDay: number) => {
@@ -930,14 +1159,18 @@ export default function Home() {
             <div>
               <p className="section-kicker">
                 {routeMode
-                  ? "Сохранено на этом телефоне"
+                  ? previewRouteKeys
+                    ? "Открыто по ссылке"
+                    : "Сохранено на этом устройстве"
                   : day === 24
                     ? "Открытие фестиваля"
                     : "Основная программа"}
               </p>
               <h2>
                 {routeMode
-                  ? "Мой маршрут"
+                  ? previewRouteKeys
+                    ? "Маршрут из ссылки"
+                    : "Мой маршрут"
                   : mode === "active"
                   ? `Идут в ${formatTime(selectedTime)}`
                   : mode === "soon"
@@ -946,6 +1179,27 @@ export default function Home() {
               </h2>
             </div>
             <div className="program-heading-actions">
+              {routeMode && previewRouteKeys && (
+                <button
+                  className="route-share-button is-import"
+                  type="button"
+                  onClick={() => mergeRouteKeys(previewRouteKeys)}
+                >
+                  <Star size={17} strokeWidth={2.2} aria-hidden="true" />
+                  Добавить к моему
+                </button>
+              )}
+              {routeMode && !previewRouteKeys && (
+                <button
+                  className="route-share-button"
+                  type="button"
+                  onClick={shareRoute}
+                  disabled={!favoriteKeys.length}
+                >
+                  <Share2 size={17} strokeWidth={2.2} aria-hidden="true" />
+                  Поделиться
+                </button>
+              )}
               <button
                 className={`route-desktop-button ${routeMode ? "selected" : ""}`}
                 data-testid="route-desktop"
@@ -1057,11 +1311,35 @@ export default function Home() {
 
           {routeMode && (
             <div className="route-mobile-heading">
-              <span>Мой маршрут</span>
+              <span>
+                {previewRouteKeys ? "Маршрут из ссылки" : "Мой маршрут"}
+              </span>
               <strong>{day} июля</strong>
-              <button type="button" onClick={showProgram}>
-                Все события
-              </button>
+              <div className="route-mobile-actions">
+                {previewRouteKeys ? (
+                  <button
+                    className="route-mobile-import"
+                    type="button"
+                    onClick={() => mergeRouteKeys(previewRouteKeys)}
+                  >
+                    <Star size={15} strokeWidth={2.2} aria-hidden="true" />
+                    Добавить
+                  </button>
+                ) : (
+                  <button
+                    className="route-mobile-share"
+                    type="button"
+                    onClick={shareRoute}
+                    disabled={!favoriteKeys.length}
+                    aria-label="Поделиться моим маршрутом"
+                  >
+                    <Share2 size={17} strokeWidth={2.2} aria-hidden="true" />
+                  </button>
+                )}
+                <button type="button" onClick={showProgram}>
+                  Все события
+                </button>
+              </div>
             </div>
           )}
 
@@ -1522,6 +1800,149 @@ export default function Home() {
               </button>
               <span>{selectedEvent.age}</span>
             </div>
+          </section>
+        </div>
+      )}
+
+      {shareDialogOpen && shareUrl && (
+        <div
+          className="route-share-backdrop"
+          role="presentation"
+          onMouseDown={(mouseEvent) => {
+            if (mouseEvent.currentTarget !== mouseEvent.target) return;
+            setShareDialogOpen(false);
+            setBottomNavHidden(false);
+          }}
+        >
+          <section
+            className="route-share-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="route-share-title"
+          >
+            <button
+              className="route-share-close"
+              type="button"
+              aria-label="Закрыть окно"
+              onClick={() => {
+                setShareDialogOpen(false);
+                setBottomNavHidden(false);
+              }}
+            >
+              <X size={19} strokeWidth={2.2} />
+            </button>
+
+            <div className="route-share-heading">
+              <p>Мой маршрут</p>
+              <h2 id="route-share-title">Поделиться маршрутом</h2>
+              <span>
+                {favoriteKeys.length} {eventCountLabel(favoriteKeys.length)} ·{" "}
+                {routeDays(favoriteKeys)
+                  .map((routeDay) => `${routeDay} июля`)
+                  .join(" · ")}
+              </span>
+            </div>
+
+            <div className="route-share-qr">
+              <QRCodeSVG
+                value={shareUrl}
+                size={220}
+                level="M"
+                marginSize={2}
+                bgColor="#fffdf8"
+                fgColor="#173c32"
+                title="QR-код со ссылкой на маршрут"
+              />
+            </div>
+
+            <p className="route-share-hint">
+              Наведите камеру телефона — откроется готовый маршрут
+            </p>
+
+            <div className="route-share-link">
+              <span title={shareHost}>{shareHost}</span>
+              <button type="button" onClick={copyRouteLink}>
+                <Copy size={17} strokeWidth={2.2} aria-hidden="true" />
+                Скопировать
+              </button>
+            </div>
+
+            <button
+              className="route-share-native"
+              type="button"
+              onClick={shareRouteViaApps}
+            >
+              <Share2 size={18} strokeWidth={2.2} aria-hidden="true" />
+              Поделиться через приложения
+            </button>
+            <small>
+              Получатель сначала увидит маршрут и сам решит, добавлять ли его к
+              своему.
+            </small>
+          </section>
+        </div>
+      )}
+
+      {incomingRouteKeys && (
+        <div
+          className="shared-route-backdrop"
+          role="presentation"
+          onMouseDown={(mouseEvent) => {
+            if (mouseEvent.currentTarget !== mouseEvent.target) return;
+            setIncomingRouteKeys(null);
+            clearSharedRouteHash();
+          }}
+        >
+          <section
+            className="shared-route-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="shared-route-title"
+          >
+            <div className="shared-route-icon" aria-hidden="true">
+              <Share2 size={22} strokeWidth={2.1} />
+            </div>
+            <button
+              className="shared-route-close"
+              type="button"
+              aria-label="Закрыть"
+              onClick={() => {
+                setIncomingRouteKeys(null);
+                clearSharedRouteHash();
+              }}
+            >
+              <X size={19} strokeWidth={2.2} />
+            </button>
+            <p>Вам прислали маршрут</p>
+            <h2 id="shared-route-title">
+              {incomingRouteKeys.length}{" "}
+              {eventCountLabel(incomingRouteKeys.length)}
+            </h2>
+            <span>
+              {routeDays(incomingRouteKeys)
+                .map((routeDay) => `${routeDay} июля`)
+                .join(" · ")}
+            </span>
+            <div className="shared-route-actions">
+              <button
+                className="shared-route-preview"
+                type="button"
+                onClick={previewIncomingRoute}
+              >
+                Посмотреть маршрут
+              </button>
+              <button
+                className="shared-route-merge"
+                type="button"
+                onClick={() => mergeRouteKeys(incomingRouteKeys)}
+              >
+                Добавить к моему
+              </button>
+            </div>
+            <small>
+              Ваш сохранённый маршрут не изменится, пока вы не выберете
+              «Добавить».
+            </small>
           </section>
         </div>
       )}
