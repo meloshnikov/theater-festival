@@ -204,8 +204,8 @@ export function formatTime(value: number) {
 
 export function durationLabel(start: number, end: number) {
   const duration = end - start;
-  if (duration === 60) return "1 ч.";
-  if (duration > 60 && duration % 60 === 0) return `${duration / 60} ч.`;
-  if (duration > 60) return `${Math.floor(duration / 60)} ч. ${duration % 60} мин.`;
-  return `${duration} мин.`;
+  if (duration === 60) return "1 ч";
+  if (duration > 60 && duration % 60 === 0) return `${duration / 60} ч`;
+  if (duration > 60) return `${Math.floor(duration / 60)} ч ${duration % 60} мин`;
+  return `${duration} мин`;
 }
