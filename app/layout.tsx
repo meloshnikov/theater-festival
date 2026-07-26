@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Куда идти дальше — фестиваль «Елагин парк»",
+  title: "Фестиваль в твоём ритме",
   description:
     "Интерактивная программа XIV Международного фестиваля уличных театров «Елагин парк», 24–26 июля 2026 года.",
   other: {
