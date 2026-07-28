@@ -35,6 +35,15 @@ npm run build:vercel
 
 Дополнительные переменные окружения для расписания не требуются.
 
+## Phoenix UX/UI handoff
+
+Согласованное ТЗ MVP 3.15, desktop-макеты и карта расхождений с текущей
+реализацией находятся в [`docs/phoenix/`](docs/phoenix/README.md).
+
+Текущая реализация не должна использоваться как замена требованиям из handoff:
+перед развитием desktop, Карты или Моего маршрута сначала проверьте
+`docs/phoenix/requirements/ostrov-kak-partitura-mvp-spec-v3.md`.
+
 ## Другие команды
 
 - `npm run lint` — проверка кода;
